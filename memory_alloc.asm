@@ -124,16 +124,17 @@ heap_alloc:
     ; if rdi rbx - Header_size <= 0 ; if 0 then it couldnt contain any data and would be interpreted as last header
     ; then we cant construct next header
     cmp     rbx,0 
-    ja .create_next_head
+    jg .create_next_head        ; signed greater
         add rbx, Header_size    ; get the left-overs
         add rdi, rbx            ; add the left-overs to the size
         SET_SIZE(rax, rdi)
         jmp .ret
     .create_next_head:
     SET_SIZE(rax, rdi)
+    add     rax, rdi
     add     rax, Header_size    ; set to start of allocated block (addr to return) 
-    SET_FREE(rax + rdi)
-    SET_SIZE(rax + rdi , rbx)
+    SET_FREE(rax)
+    SET_SIZE(rax, rbx)
 jmp .ret
     .check_next_block
     add     rax, rbx
@@ -220,6 +221,18 @@ heap_free:
     
     .ret:
     pop rdi
+ret
+
+; request to resize region of *addr, to new_size.
+; if its not legal then copy data to new allocated region
+; return pointer to either old region or new
+;
+; rdi = addr
+; rsi = new_size
+; ret:
+; rax = new_addr
+heap_realloc:
+
 ret
 
 %ifdef DEBUG
