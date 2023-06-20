@@ -117,7 +117,6 @@ heap_alloc:
     ; greater or equal than our desire, so we can allocate it
     SET_FULL(rax)  
     
-
     sub     rbx, rdi            ; what is left to the next chunk
     sub     rbx, Header_size    ; sub next block header_size, to only have its true size
 
@@ -128,13 +127,17 @@ heap_alloc:
         add rbx, Header_size    ; get the left-overs
         add rdi, rbx            ; add the left-overs to the size
         SET_SIZE(rax, rdi)
+        add rax, Header_size
         jmp .ret
     .create_next_head:
     SET_SIZE(rax, rdi)
-    add     rax, rdi
-    add     rax, Header_size    ; set to start of allocated block (addr to return) 
-    SET_FREE(rax)
+    add     rax, Header_size    
+    push    rax
+    add     rax, rdi            ; set to start of allocated block (addr to return) 
+    SET_FREE(rax)               ; left-overs
+    sub     rbx, Header_size    ; calculate leaft-overs real size
     SET_SIZE(rax, rbx)
+    pop     rax            ; restore return value *addr
 jmp .ret
     .check_next_block
     add     rax, rbx
@@ -200,13 +203,10 @@ heap_free:
     sub rdi, Header_size    ;|<RDI> this H| this DATA |
 
     call find_prev_block    ; rax
+    cmp GET_FULL(rax), FULL ; if *prev is full
+    je .prev_full                 ; return
 
-    cmp GET_FULL(rax), FREE ; if *prev is free
-    je .free
-    .full:                  ; if *pref is full
-        SET_FREE(rdi)       ; just set freed to free 
-        jmp .ret
-    .free:                  ; *prev is free
+    ; *prev is free
     ;
     ; | <*rax>      PREV HEAD | PREV | <*rdi>  FREED HEAD | FREED <*end_free> |
     ; new_size = *end_free - rax - Header_size 
@@ -215,12 +215,15 @@ heap_free:
     ;
     add rdi, GET_SIZE(rdi)      
     sub rdi, rax            ; size of NEW_BLOCK
-    ; sub rdi, Header_size    
 
     SET_SIZE(rax, rdi)      ; its already free, we checked for it
     
-    .ret:
+    .prev_full: ; now we check if next is free
+
+    add GET_SIZE(rax)
+
     pop rdi
+    SET_FREE(rdi - Header_size)
 ret
 
 ; request to resize region of *addr, to new_size.
