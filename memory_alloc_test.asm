@@ -49,7 +49,6 @@ _start:
     mov DWORD[rax+3], 10
     
     print rax, 4
-    call print_endl
     mov [last], rax
     
     pop rdi ; second alloc

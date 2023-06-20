@@ -198,13 +198,18 @@ ret
 ; rdi = addr 
 ; no return
 heap_free:
-    push rdi
-
+    push rax
+    push rdi    ; beggining addr 
+    push rsi    ; total size
+    
     sub rdi, Header_size    ;|<RDI> this H| this DATA |
+    mov rsi, GET_SIZE(rdi)  ; set base size
+
+    SET_FREE(rdi)           ; FREE in any case
 
     call find_prev_block    ; rax
     cmp GET_FULL(rax), FULL ; if *prev is full
-    je .prev_full                 ; return
+    je .check_next                 ; return
 
     ; *prev is free
     ;
@@ -213,17 +218,29 @@ heap_free:
     ;          = *rdi + FREED_SIZE - rax
     ; | <*rax> NEW_BLOCK HEAD |              NEW_BLOCK                        |
     ;
-    add rdi, GET_SIZE(rdi)      
-    sub rdi, rax            ; size of NEW_BLOCK
-
-    SET_SIZE(rax, rdi)      ; its already free, we checked for it
+    mov rdi, rax
+    add rsi, GET_SIZE(rdi)   ; add size of previous
+    add rsi, Header_size        
     
-    .prev_full: ; now we check if next is free
+    .check_next:            ; now we check if next is free
+    mov rbx, rdi            
+    add rbx, rsi            ;| this HEAD | this DATA | <RBX> next HEAD | next DATA |
 
-    add GET_SIZE(rax)
+    ; check if *next is last : size == 0
+    cmp GET_SIZE(rbx), 0
+    jz .ret
+    cmp GET_FULL(rbx), FULL
+    je .ret
 
+    ; is zero : set main size to main + size
+    add rsi, GET_SIZE(rbx)
+    add rsi, Header_size
+
+    .ret:
+    SET_SIZE(rdi, rsi)      ; its already free, we checked for it
+    pop rsi
     pop rdi
-    SET_FREE(rdi - Header_size)
+    pop rax
 ret
 
 ; request to resize region of *addr, to new_size.
@@ -236,6 +253,9 @@ ret
 ; rax = new_addr
 heap_realloc:
 
+    sub rdi, addr
+
+    GET_SIZE(addr)
 ret
 
 %ifdef DEBUG
