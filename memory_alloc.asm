@@ -3,31 +3,28 @@ global _start
 global heap_init
 global heap_alloc
 global heap_free
-global heap_header_debug
+global heap_realloc
 
 %include "../libs/macros.asm"
 
-%ifdef DEBUG
-extern print
-%endif
 extern print_num
 extern print_endl
 extern print_char
 
-%define BRK 12
+%ifdef DEBUG
+global heap_header_debug
+extern print
+%endif
 
-; %define TRUE  1
-; %define FALSE 0
+%define BRK 12
 
 %define FREE 01111111b
 %define FULL 11111111b
 
 %define MIN_BRK 100; in bytes
 
-
 ; for now all of these macros operate when,
 ; *addr is pointing to START OF THE HEADER (not the pointer returned by heap_alloc)
-; COULD CHANGE THAT LATER, but idk if its worth it
 %define SET_SIZE(addr,size) mov QWORD[addr + Header.size], size
 %define SET_FULL(addr)      mov BYTE[addr + Header.full], FULL
 %define SET_FREE(addr)      mov BYTE[addr + Header.full], FREE
@@ -89,6 +86,8 @@ section .text
 ; rdi = size
 ; out:
 ; rax = addr
+; TODO: check if this is last one (next is size 0)
+;       then we can shift break 
 heap_alloc:
     push rbx
     push rdi
@@ -252,10 +251,75 @@ ret
 ; ret:
 ; rax = new_addr
 heap_realloc:
+    push rbx
+    push rdi
+    push rsi
 
-    sub rdi, addr
+    mov rax, rdi            ; (RETURN) if(this is sufficient)
+    mov rdx, rdi            ; rdi will come handy on relocation
+    sub rdx, Header_size
+    mov rbx, GET_SIZE(rdx)
+    cmp rbx, rsi            ; check if size is enough already
+    jae .ret                ; size was sufficient
+        ; size was not sufficient
+        ; now check if next block is empty
+        add rdx, Header_size
+        add rdx, rbx
+        cmp GET_FULL(rdx), FULL
+        je .relocation
+            ; check if next block would complete desired size
+            add rbx, GET_SIZE(rdx) 
+            add rbx, Header_size   ; max local size
+            cmp rbx, rsi
+            jb .relocation
+                ; this is sufficient
+                SET_SIZE(rax, rbx)
+                ;(RETURN) rax
+                jmp .ret
+        .relocation
+        call heap_free  ; free this mem *rdi
 
-    GET_SIZE(addr)
+        push rdi        ; save rdi
+        mov  rdi, rsi   ; set size param for heap_alloc
+        call heap_alloc ; rax = *new[new_size] (RETURN)
+        
+        pop  rdi        ; rdi : *src (I told u it will be needed :v)
+        mov rcx, rsi    ; rcx ; size
+        mov rsi, rax    ; rsi : *dst
+        call heap_copy
+    .ret:
+    pop rsi
+    pop rdi
+    pop rbx
+ret
+
+; copy DATA from *scr to *dst on the heap
+;
+; rdi : *src  (data region)
+; rsi : *dst  (data region)
+; rcx ; size
+heap_copy:
+    push rax
+    push rdi
+    push rsi
+    push rcx
+
+    ; SIZE via argument
+    ; mov rcx, GET_SIZE(rdi - Header_size) 
+    sub rcx, 1 ; <size-1, 1>
+    .loop:
+        mov al, BYTE[rdi + rcx] ; temp
+        mov BYTE[rsi + rcx], al ; to dst
+    loop .loop
+
+    ; index zero
+    mov al, BYTE[rdi] ; temp
+    mov BYTE[rsi], al ; to dst
+
+    pop rcx
+    pop rsi
+    pop rdi
+    pop rax
 ret
 
 %ifdef DEBUG
@@ -285,6 +349,7 @@ heap_header_debug:
 ret
 %endif
 
+
 heap_init:
     ; get initial break position, or `_end` from linker
     add rdi, 0
@@ -303,34 +368,3 @@ heap_init:
     SET_FREE(rax)
     SET_SIZE(rax, 0)
 ret
-
-
-; _start:
-;     %define n 25
-;     call heap_init
-
-;     mov  rdi, n
-;     call heap_alloc     ; rax = malloc()
-
-;     mov  rdi, rax       ; rdi = rax
-;     call heap_header_debug   
-
-;     ; mov rdi, 1
-;     ; call heap_alloc
-
-;     mov rdi, rax
-;     call heap_header_debug
-
-;     ; mov  rcx, n + 3
-;     ; .loop:
-;     ; push rcx
-
-;     ; mov rbx, rcx
-;     ; add bl, 'A'
-;     ; mov BYTE[rax + rcx], bl
-
-;     ; loop .loop
-
-;     print rax, n
-
-;     sys_exit

@@ -3,6 +3,7 @@ global _start
 extern heap_init
 extern heap_free
 extern heap_alloc
+extern heap_realloc
 extern heap_header_debug
 
 extern print_endl
@@ -92,14 +93,22 @@ _start:
     call heap_header_debug
     print rdi, 4
     
-    ; print rax, 1
-    ; call print_endl
+    %define M 16
+    .reall
+    ; realloc
+    call print_endl
+    mov rdi, [first]
+    mov rsi, M
+    call heap_realloc
 
-    ; mov rdi, 8
-    ; call heap_alloc
-    ; call print_num
-    ; call print_endl
-    
+    mov DWORD[rax+7], "FUL "
+    mov DWORD[rax+11], "COPY"
+    mov BYTE[rax+15], 10
+
+    print rax, M
+    mov rdi, rax
+
+    call heap_header_debug
     sys_exit
 
 section .bss
