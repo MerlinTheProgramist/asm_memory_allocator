@@ -5,15 +5,12 @@ global heap_alloc
 global heap_free
 global heap_realloc
 
-%include "../libs/macros.asm"
-
+%ifdef DEBUG
+global heap_header_debug
+extern print_str
 extern print_num
 extern print_endl
 extern print_char
-
-%ifdef DEBUG
-global heap_header_debug
-extern print
 %endif
 
 %define BRK 12
@@ -35,35 +32,6 @@ extern print
 %define ADD_SIZE(addr,size) add QWORD[addr + Header.size], size
 %define CHECK_FULL(addr) cmp BYTE[addr + Header.full], FULL
 
-; rdi : new *brk
-sys_brk:
-    push rcx
-    push rdx
-    push rsi
-    push rdi
-    push rax
-        
-        ; add  rdi, [heap_begin]      ; add begin to input size
-        mov rax, BRK
-        syscall     ; rax, rdi, rsi, rdx, rcx, r8, r9, r10, r11 are modified
-
-        %ifdef DEBUG
-        cmp rax, QWORD[heap_begin]
-        jne .nominal
-            print error_brk, [error_brk_len]
-            sys_exit
-        .nominal:
-        %endif
-
-        mov  QWORD[heap_end], rax
-
-    pop rax
-    pop rdi
-    pop rsi
-    pop rdx
-    pop rcx
-ret 
-
 ; memory block headrer
 struc Header
     .size: resq 1 ; could change to DWORD, because <4GB is still a LOT
@@ -82,6 +50,26 @@ section .data
     %endif
 
 section .text 
+; rdi : new *brk
+sys_brk:
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push rax
+        
+        ; add  rdi, [heap_begin]      ; add begin to input size
+        mov rax, BRK
+        syscall     ; rax, rdi, rsi, rdx, rcx, r8, r9, r10, r11 are modified
+
+        mov  QWORD[heap_end], rax
+
+    pop rax
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+ret 
 
 ; rdi = size
 ; out:
@@ -91,6 +79,8 @@ section .text
 heap_alloc:
     push rbx
     push rdi
+    push rcx
+
 
     ; if size == 0: then do nothing
     test rdi, rdi
@@ -100,6 +90,7 @@ heap_alloc:
     .input_valid:
 
     mov   rax, QWORD[heap_begin] ; load heap_begin address
+    mov   rcx, rax
 
     .block_check:
     mov   rbx, GET_SIZE(rax)
@@ -113,39 +104,61 @@ heap_alloc:
     jl    .check_next_block ; if too small, then check next
 
     .allocate:
-    ; greater or equal than our desire, so we can allocate it
-    SET_FULL(rax)  
-    
-    sub     rbx, rdi            ; what is left to the next chunk
-    sub     rbx, Header_size    ; sub next block header_size, to only have its true size
+        ; greater or equal than our desire, so we can allocate it
+        SET_FULL(rax)  
+        
+        sub     rbx, rdi            ; what is left for the next chunk, after allocating this
 
-    ; if rdi rbx - Header_size <= 0 ; if 0 then it couldnt contain any data and would be interpreted as last header
-    ; then we cant construct next header
-    cmp     rbx,0 
-    jg .create_next_head        ; signed greater
-        add rbx, Header_size    ; get the left-overs
-        add rdi, rbx            ; add the left-overs to the size
+        ; if rdi rbx - Header_size <= 0 ; if 0 then it couldnt contain any data and would be interpreted as last header
+        ; then we cant construct next header, we have to allocate more that requested
+        cmp     rbx, Header_size+1  ; compare to minimum block size Head+1
+        jge .create_next_head       ; if left-overs are greater than minimum block size
+            add rax, Header_size    ; (RETURN) 
+            jmp .ret
+        .create_next_head:
         SET_SIZE(rax, rdi)
-        add rax, Header_size
-        jmp .ret
-    .create_next_head:
-    SET_SIZE(rax, rdi)
-    add     rax, Header_size    
-    push    rax
-    add     rax, rdi            ; set to start of allocated block (addr to return) 
-    SET_FREE(rax)               ; left-overs
-    sub     rbx, Header_size    ; calculate leaft-overs real size
-    SET_SIZE(rax, rbx)
-    pop     rax            ; restore return value *addr
-jmp .ret
+        add     rax, Header_size    
+        push    rax                 ; save rax for *addr return
+        add     rax, rdi            ; set to end of alocated block, to setup the next header
+        sub     rbx, Header_size    ; calculate leaft-overs real size
+        SET_SIZE(rax, rbx)          ; set next header
+        SET_FREE(rax)              
+        pop     rax                 ; restore return value *addr 
+    jmp .ret
+
     .check_next_block
+    mov     rcx, rax            ; save as *prev  
     add     rax, rbx
-    add     rax, Header_size
+    add     rax, Header_size    ; increment to next block
     jmp .block_check
 
     .last_block ; this is the last block, has size 0
                 ; so we need to request more memory from kernel and then our last will  
     
+    ; check if previous was free, and not same as this 
+    cmp rcx, rax
+    je .prev_full
+    cmp GET_FULL(rcx), FULL
+    je .prev_full
+        ; *prev is free
+        sub rdi, GET_SIZE(rcx) ; rdi = left to alloc
+        add rax, Header_size*2    
+        add rax, rdi           
+        push rdi
+        mov rdi, rax
+        ; |<RAX> last H 0| <RAX> new DATA | new last H 0| <RAX>
+        call sys_brk
+        pop rdi
+
+        SET_FULL(rcx)
+        add GET_SIZE(rcx), rdi      ; add to desired
+        ; create new ending header
+        sub rax, Header_size
+        SET_FREE(rax)
+        SET_SIZE(rax, 0)
+        jmp .ret
+    .prev_full  ; allocate entirely new region
+
     ; override this header
     SET_FULL(rax)
     SET_SIZE(rax, rdi)
@@ -162,6 +175,7 @@ jmp .ret
     SET_SIZE(rbx, 0)
 
     .ret:
+    pop rcx
     pop rdi
     pop rbx
 ret
@@ -197,16 +211,14 @@ ret
 ; rdi = addr 
 ; no return
 heap_free:
-    push rax
-    push rdi    ; beggining addr 
+    push rax    
     push rsi    ; total size
+    push rdi    ; beggining addr 
     
     sub rdi, Header_size    ;|<RDI> this H| this DATA |
     mov rsi, GET_SIZE(rdi)  ; set base size
 
-    SET_FREE(rdi)           ; FREE in any case
-
-    call find_prev_block    ; rax
+    call find_prev_block    ; rax = prev header
     cmp GET_FULL(rax), FULL ; if *prev is full
     je .check_next                 ; return
 
@@ -217,12 +229,13 @@ heap_free:
     ;          = *rdi + FREED_SIZE - rax
     ; | <*rax> NEW_BLOCK HEAD |              NEW_BLOCK                        |
     ;
-    mov rdi, rax
+    mov rdi, rax             ; change beggining addr
     add rsi, GET_SIZE(rdi)   ; add size of previous
     add rsi, Header_size        
     
     .check_next:            ; now we check if next is free
-    mov rbx, rdi            
+    mov rbx, rdi          
+    add rbx, Header_size  
     add rbx, rsi            ;| this HEAD | this DATA | <RBX> next HEAD | next DATA |
 
     ; check if *next is last : size == 0
@@ -237,10 +250,12 @@ heap_free:
 
     .ret:
     SET_SIZE(rdi, rsi)      ; its already free, we checked for it
-    pop rsi
+    SET_FREE(rdi)           
     pop rdi
+    pop rsi
     pop rax
 ret
+
 
 ; request to resize region of *addr, to new_size.
 ; if its not legal then copy data to new allocated region
@@ -257,36 +272,50 @@ heap_realloc:
 
     mov rax, rdi            ; (RETURN) if(this is sufficient)
     mov rdx, rdi            ; rdi will come handy on relocation
-    sub rdx, Header_size
-    mov rbx, GET_SIZE(rdx)
+    mov rbx, GET_SIZE(rdx - Header_size)  ; rbx = current size
     cmp rbx, rsi            ; check if size is enough already
     jae .ret                ; size was sufficient
         ; size was not sufficient
         ; now check if next block is empty
-        add rdx, Header_size
-        add rdx, rbx
+        add rdx, rbx               ; rdx = next header *addr
         cmp GET_FULL(rdx), FULL
-        je .relocation
+        je .relocation              
+            ; next is empty
             ; check if next block would complete desired size
             add rbx, GET_SIZE(rdx) 
-            add rbx, Header_size   ; max local size
+            add rbx, Header_size   ; max local size (this + Header + next)
             cmp rbx, rsi
             jb .relocation
                 ; this is sufficient
-                SET_SIZE(rax, rbx)
-                ;(RETURN) rax
+                sub     rbx, rsi            ; get  left-over size
+                cmp     rbx, Header_size+1  ; compare to minimum block size Head+1
+                jge .create_next_head       ; allocate all to this
+                    add rbx, rsi                        ; revert to local max block size
+                    SET_SIZE(rax - Header_size, rbx)    ; update this header size    
+                    jmp .ret
+                .create_next_head:          ; left-overs are greater than minimum block size
+
+                SET_SIZE(rax - Header_size, rsi)
+                push    rax                 ; save rax for *addr return
+                add     rax, rsi            ; set to end of alocated block, to setup the next header
+                sub     rbx, Header_size    ; calculate leaft-overs real size
+                SET_SIZE(rax, rbx)          ; set next header
+                SET_FREE(rax)              
+                pop     rax                 ; restore (RETURn) value *addr 
                 jmp .ret
-        .relocation
+        .relocation     ; next is full or insufficient, 
+                        ; we need to copy data
         call heap_free  ; free this mem *rdi
 
         push rdi        ; save rdi
         mov  rdi, rsi   ; set size param for heap_alloc
         call heap_alloc ; rax = *new[new_size] (RETURN)
         
-        pop  rdi        ; rdi : *src (I told u it will be needed :v)
+        pop rdi         ; rdi : *src (I told u it will be needed :v)
         mov rcx, rsi    ; rcx ; size
         mov rsi, rax    ; rsi : *dst
-        call heap_copy
+        call mem_cpy
+        ; (RETURN) rax is *dst
     .ret:
     pop rsi
     pop rdi
@@ -298,7 +327,7 @@ ret
 ; rdi : *src  (data region)
 ; rsi : *dst  (data region)
 ; rcx ; size
-heap_copy:
+mem_cpy:
     push rax
     push rdi
     push rsi
@@ -327,6 +356,12 @@ ret
 heap_header_debug:
     push rax
     push rdi
+    push rsi
+
+    call print_num
+
+    mov rax, ':'
+    call print_char
 
     mov rax, GET_SIZE(rdi - Header_size)
     call print_num 
@@ -342,8 +377,16 @@ heap_header_debug:
         call print_char
     .ret
 
+    mov rax, ':'
+    call print_char
+
+    mov rsi, rdi
+    mov rdi, GET_SIZE(rsi - Header_size)
+    call print_str 
+
     call print_endl
 
+    pop rsi
     pop rdi
     pop rax
 ret
