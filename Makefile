@@ -6,9 +6,9 @@ EXE_NAME := memory_alloc_test
 debug: ASM_FLAGS := ${ASM_FLAGS} -g dwarf2 -D DEBUG
 debug: LIB_NAME  := ${LIB_NAME}_debug
 debug: EXE_NAME  := ${EXE_NAME}_debug
-debug: all
+debug: all executable
 
-all: library executable
+all: library
 
 library:
 	@yasm ${ASM_FLAGS} ./memory_alloc.asm -o ${LIB_NAME}

@@ -56,7 +56,7 @@ sys_brk:
     push rdx
     push rsi
     push rdi
-    push rax
+    push rax 
         
         ; add  rdi, [heap_begin]      ; add begin to input size
         mov rax, BRK
@@ -260,6 +260,9 @@ ret
 ; request to resize region of *addr, to new_size.
 ; if its not legal then copy data to new allocated region
 ; return pointer to either old region or new
+;
+; TODO:
+; - way to deallocate memory for realloc (if new_size was smaller than curr size)
 ;
 ; rdi = addr
 ; rsi = new_size
